@@ -1,15 +1,15 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, Address, Env};
+use soroban_sdk::{contract, contracterror, contractimpl, Address, Env, IntoVal, Symbol, Vec};
 
 #[contract]
 pub struct PaymentContract;
 
-#[derive(Debug)]
 #[contracterror]
+#[derive(Debug)]
 pub enum PaymentError {
-    TimeNotReached = 1,
-    AlreadyPaid = 2,
-    TransferFailed = 3,
+    TimeNotReached=1,
+    AlreadyPaid=2,
+    TransferFailed=3,
 }
 
 #[contractimpl]
@@ -21,9 +21,43 @@ impl PaymentContract {
     }
 
     /// Execute the payment after the delay
-    pub fn execute_payment(env: Env, token_contract_id: Address) -> Result<(), PaymentError> {
-        let _now = env.ledger().timestamp();
+    pub fn execute_payment(env: Env, token_contract_id: Address, sender: Address) -> Result<(), PaymentError> {
+        let now = env.ledger().timestamp();
         let payment: Option<(Address, i128, u64)> = env.storage().instance().get(&"payment");
-        Ok(())
+
+        if let Some((recipient, amount, start_time)) = payment {
+            if now < start_time + 48 * 3600 {
+                return Err(PaymentError::TimeNotReached);
+            }
+
+            // Prepare arguments as a `Vec<Val>`
+            let args = Vec::from_slice(
+                &env,
+                &[
+                    sender.into_val(&env),
+                    recipient.into_val(&env),
+                    amount.into_val(&env),
+                ],
+            );
+
+            // Explicitly specify the return type for `invoke_contract`
+            let transfer_result: Result<(), soroban_sdk::Error> = env.invoke_contract(
+                &token_contract_id,
+                &Symbol::new(&env,"transfer"),
+                args,
+            );
+
+            // Handle potential transfer failure
+            if transfer_result.is_err() {
+                return Err(PaymentError::TransferFailed);
+            }
+
+            // Remove the payment data after successful transfer
+            env.storage().instance().remove(&"payment");
+            Ok(())
+        } else {
+            Err(PaymentError::AlreadyPaid)
+        }
     }
 }
+
